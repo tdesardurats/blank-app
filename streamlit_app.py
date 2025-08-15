@@ -1,15 +1,23 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
-
-st.set_page_config(page_title="Livrets: intérêts, fiscalité et évolutions", page_icon="💶", layout="wide")
-
-st.title("💶 Visualiseur d'intérêts avec fiscalité, périodes de taux et graphiques")
-st.caption("Ajoutez des placements, définissez les périodes de taux dans l’année, la fiscalité, et visualisez brut/net avec courbes d’évolution.")
 import io
 
+# =========================
+# Config page
+# =========================
+st.set_page_config(page_title="Livrets: intérêts, fiscalité, périodes & graphes", page_icon="💶", layout="wide")
+
+st.title("💶 Visualiseur d'intérêts avec fiscalité, périodes de taux, tableaux et graphes")
+st.caption("Ajoutez des placements, définissez les périodes de taux, la fiscalité, et visualisez brut/net avec tableaux et courbes. Export/Import CSV inclus.")
+
+# =========================
+# Utilitaires Export/Import des entrées
+# =========================
 CSV_HEADER = [
     "type_ligne",          # META ou PLACEMENT
     "nom",                 # placement name
@@ -23,14 +31,6 @@ CSV_HEADER = [
 ]
 
 def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
-    """
-    Sérialise les placements + période globale au format CSV.
-    Schéma:
-    - 1 ligne META pour la période globale (type_ligne=META)
-    - N lignes PLACEMENT:
-      - Si pas de périodes: 1 ligne avec periode_debut/fin vides et taux_defaut rempli
-      - Si périodes: 1 ligne par période avec periode_debut/fin/taux, taux_defaut aussi présent pour info
-    """
     rows = []
     # Ligne META
     rows.append({
@@ -79,22 +79,11 @@ def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
                     "periode_taux": per.get('taux', '')
                 })
 
-    # Création CSV en mémoire
     df = pd.DataFrame(rows, columns=CSV_HEADER)
     return df.to_csv(index=False).encode("utf-8")
 
-
 def import_inputs_from_csv(file_bytes: bytes):
-    """
-    Parse le CSV et reconstruit (placements, periode_globale).
-    Retour: placements:list, periode_globale:dict
-    Règles:
-    - lire la 1ère ligne META (si plusieurs META, prendre la première trouvée)
-    - regrouper par 'nom' toutes les lignes PLACEMENT
-    """
     df = pd.read_csv(io.BytesIO(file_bytes), dtype=str).fillna("")
-
-    # Valider colonnes minimales
     missing = [c for c in CSV_HEADER if c not in df.columns]
     if missing:
         raise ValueError(f"Colonnes manquantes dans le CSV: {missing}")
@@ -107,7 +96,6 @@ def import_inputs_from_csv(file_bytes: bytes):
             g_debut = datetime.strptime(m0['periode_debut'], "%Y-%m-%d").date()
             g_fin = datetime.strptime(m0['periode_fin'], "%Y-%m-%d").date()
         except Exception:
-            # fallback: année courante si invalide
             today = date.today()
             g_debut = date(today.year, 1, 1)
             g_fin = date(today.year, 12, 31)
@@ -120,10 +108,9 @@ def import_inputs_from_csv(file_bytes: bytes):
     # Placements
     plc_rows = df[df['type_ligne'] == 'PLACEMENT'].copy()
 
-    # Normaliser types numériques
     def to_float_safe(x, default=0.0):
         try:
-            return float(x)
+            return float(str(x).replace(",", "."))
         except Exception:
             return default
 
@@ -131,7 +118,6 @@ def import_inputs_from_csv(file_bytes: bytes):
     for _, r in plc_rows.iterrows():
         nom = r['nom'].strip()
         if not nom:
-            # ignorer lignes sans nom
             continue
         if nom not in placements_dict:
             placements_dict[nom] = {
@@ -144,8 +130,6 @@ def import_inputs_from_csv(file_bytes: bytes):
                 },
                 "periodes": []
             }
-
-        # Période optionnelle
         p_deb = r['periode_debut'].strip()
         p_fin = r['periode_fin'].strip()
         p_taux = r['periode_taux'].strip()
@@ -160,12 +144,9 @@ def import_inputs_from_csv(file_bytes: bytes):
     return placements, periode_globale
 
 # =========================
-# Helpers & Calculs
+# Fonctions calcul
 # =========================
-
 def mois_range(start: date, end: date):
-    """Génère la liste des (année, mois) du 1er du mois entre start et end inclus (bornes mensualisées)."""
-    # Normalise sur le 1er du mois
     cur = date(start.year, start.month, 1)
     last = date(end.year, end.month, 1)
     res = []
@@ -179,7 +160,6 @@ def nb_jours_mois(d: date):
     return (nxt - d).days
 
 def clip_period_to_month(period_start: date, period_end: date, month_start: date) -> int:
-    """Renvoie le nombre de jours d'une période [period_start, period_end] qui tombe dans le mois de month_start."""
     month_end = month_start + relativedelta(months=1) - relativedelta(days=1)
     s = max(period_start, month_start)
     e = min(period_end, month_end)
@@ -191,27 +171,18 @@ def parse_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 def compute_brut_net_for_month(capital: float, taux_annuel: float, jours: int, base_jour: int, tax_rate: float):
-    """Calcule brut et net pour une portion de mois: intérêts simples, prorata jours/base."""
     interet_brut = capital * (taux_annuel/100.0) * (jours / base_jour)
     interet_net = interet_brut * (1.0 - tax_rate/100.0)
     return interet_brut, interet_net
 
 def build_monthly_schedule(placement: dict, start_global: date, end_global: date, base_jour=365):
-    """
-    Construit un DataFrame mensuel pour un placement:
-    Colonnes: ['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net']
-    - periods: liste de dicts {'debut':'YYYY-MM-DD','fin':'YYYY-MM-DD','taux':float}
-    - fiscalite: {'type': 'PFU'|'PERSONNALISE', 'taux': float}
-    """
     nom = placement['nom']
     capital = float(placement['somme'])
     fiscalite = placement.get('fiscalite', {'type': 'PFU', 'taux': 30.0})
     tax_rate = float(fiscalite.get('taux', 30.0))
-
-    # Périodes de taux
     periods = placement.get('periodes', [])
+
     if not periods:
-        # Fallback: taux fixe unique si aucune période fournie
         taux = float(placement.get('taux', 0.0))
         periods = [{
             'debut': start_global.strftime("%Y-%m-%d"),
@@ -219,7 +190,6 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
             'taux': taux
         }]
 
-    # Normaliser périodes sur l'intervalle global
     norm_periods = []
     for p in periods:
         deb = parse_date(p['debut'])
@@ -232,18 +202,14 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
             norm_periods.append({'debut': deb, 'fin': fin, 'taux': float(p['taux'])})
 
     if not norm_periods:
-        return pd.DataFrame(columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net'])
+        return pd.DataFrame(columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour'])
 
-    # Construire calendrier mensuel
     months = mois_range(start_global, end_global)
     rows = []
     for m_start in months:
-        total_jours = nb_jours_mois(m_start)
         interet_brut_m = 0.0
         interet_net_m = 0.0
-        # On mélange les périodes de taux qui tombent dans ce mois
-        # Strat: somme des (intérêts sur sous-période) en prorata jours
-        taux_effectif_explicatif = []  # pour info
+        taux_effectif_explicatif = []
         jours_pond = 0
         for p in norm_periods:
             jours_in_mois = clip_period_to_month(p['debut'], p['fin'], m_start)
@@ -255,10 +221,8 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
             taux_effectif_explicatif.append((p['taux'], jours_in_mois))
             jours_pond += jours_in_mois
 
-        # Si aucune période n’a recouvert ce mois (gap), intérêts nuls
         taux_affiche = 0.0
         if taux_effectif_explicatif:
-            # taux pondéré par jours dans le mois (sur base 30j/31j n’intervient pas, on affiche indicatif)
             somme_taux_jours = sum(t * j for t, j in taux_effectif_explicatif)
             taux_affiche = somme_taux_jours / sum(j for _, j in taux_effectif_explicatif)
 
@@ -276,22 +240,25 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
     if not df.empty:
         df['Int_brut'] = df['Int_brut'].round(2)
         df['Int_net'] = df['Int_net'].round(2)
+        # Ajoute nb_jours du mois et moyennes/jour
+        df['nb_jours'] = df['Date'].apply(nb_jours_mois)
+        df['Brut_moyen_jour'] = (df['Int_brut'] / df['nb_jours']).round(4)
+        df['Net_moyen_jour'] = (df['Int_net'] / df['nb_jours']).round(4)
     return df
 
 # =========================
-# État & Saisie
+# État
 # =========================
-
 if 'placements' not in st.session_state:
-    st.session_state.placements = []  # liste de dicts placements
+    st.session_state.placements = []
 
 if 'periode_globale' not in st.session_state:
-    # Par défaut: année en cours
     today = date.today()
-    start_default = date(today.year, 1, 1)
-    end_default = date(today.year, 12, 31)
-    st.session_state.periode_globale = {'debut': start_default, 'fin': end_default}
+    st.session_state.periode_globale = {'debut': date(today.year, 1, 1), 'fin': date(today.year, 12, 31)}
 
+# =========================
+# Barre latérale: paramètres globaux
+# =========================
 with st.sidebar:
     st.header("Paramètres globaux")
     col_g1, col_g2 = st.columns(2)
@@ -305,10 +272,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("Base de calcul journalière (prorata linéaire)")
-    base_jour = st.number_input("Base jours/an", min_value=360, max_value=366, value=365, step=1, help="365 par défaut. 360 possible pour certaines conventions.")
+    base_jour = st.number_input("Base jours/an", min_value=360, max_value=366, value=365, step=1, help="365 par défaut. 360 possible selon conventions.")
 
+# =========================
+# Saisie des placements
+# =========================
 st.subheader("Ajouter ou modifier un placement")
-
 with st.expander("Ajouter un placement"):
     col1, col2, col3 = st.columns([2,1,1])
     with col1:
@@ -330,7 +299,6 @@ with st.expander("Ajouter un placement"):
 
     st.markdown("Périodes de taux (facultatif)")
     st.caption("Ajoutez une ou plusieurs périodes avec des taux différents dans l’année.")
-    per_list = st.session_state.get('periodes_temp', [])
     if 'periodes_temp' not in st.session_state:
         st.session_state.periodes_temp = []
 
@@ -352,7 +320,6 @@ with st.expander("Ajouter un placement"):
             else:
                 st.warning("La date de début de période doit précéder la date de fin.")
 
-    # Aperçu des périodes ajoutées
     if st.session_state.periodes_temp:
         st.dataframe(pd.DataFrame(st.session_state.periodes_temp), use_container_width=True, hide_index=True)
         if st.button("Vider les périodes"):
@@ -376,12 +343,13 @@ with st.expander("Ajouter un placement"):
             st.session_state.periodes_temp = []
             st.success(f"Placement « {placement['nom']} » enregistré.")
 
-# Liste des placements
+# =========================
+# Liste des placements et calculs
+# =========================
 st.subheader("Placements")
 if not st.session_state.placements:
     st.info("Aucun placement pour l’instant. Ajoutez-en via le panneau ci-dessus.")
 else:
-    # Tableau synthèse des réglages
     synth_rows = []
     for p in st.session_state.placements:
         synth_rows.append({
@@ -393,106 +361,195 @@ else:
         })
     st.dataframe(pd.DataFrame(synth_rows), use_container_width=True, hide_index=True)
 
-    # Calculs détaillés
     debut = st.session_state.periode_globale['debut']
     fin = st.session_state.periode_globale['fin']
     all_monthly = []
     for p in st.session_state.placements:
         dfp = build_monthly_schedule(p, debut, fin, base_jour=base_jour)
         all_monthly.append(dfp)
-    if all_monthly:
-        monthly = pd.concat(all_monthly, ignore_index=True)
-    else:
-        monthly = pd.DataFrame(columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net'])
-
-    # Agrégats
-    st.markdown("### Résultats mensuels (brut et net)")
-    st.dataframe(
-        monthly.sort_values(['Date','Placement']),
-        use_container_width=True,
-        hide_index=True
+    monthly = pd.concat(all_monthly, ignore_index=True) if all_monthly else pd.DataFrame(
+        columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour']
     )
+
+    # Tableau mensuel enrichi
+    st.markdown("### Résultats mensuels enrichis (brut/net + nb_jours + moyennes/jour)")
+    monthly_display = monthly.sort_values(['Date','Placement']).copy()
+    if not monthly_display.empty:
+        monthly_display_fmt = monthly_display.copy()
+        monthly_display_fmt['Date'] = monthly_display_fmt['Date'].dt.strftime("%Y-%m")
+        st.dataframe(
+            monthly_display_fmt[['Date','Placement','Capital','Taux(%)','nb_jours','Jours_pondérés','Int_brut','Int_net','Brut_moyen_jour','Net_moyen_jour']],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("Aucune donnée mensuelle sur la période sélectionnée.")
 
     # Totaux par placement
-    totals_by_pl = monthly.groupby('Placement', as_index=False).agg({
-        'Int_brut': 'sum', 'Int_net': 'sum', 'Capital':'first'
-    }).rename(columns={'Int_brut':'Total brut (€)','Int_net':'Total net (€)','Capital':'Capital (€)'})
-    totals_by_pl['Total brut (€)'] = totals_by_pl['Total brut (€)'].round(2)
-    totals_by_pl['Total net (€)'] = totals_by_pl['Total net (€)'].round(2)
-
     st.markdown("### Totaux par placement")
-    st.dataframe(totals_by_pl, use_container_width=True, hide_index=True)
+    if not monthly.empty:
+        totals_by_pl = monthly.groupby('Placement', as_index=False).agg({
+            'Int_brut': 'sum', 'Int_net': 'sum', 'Capital':'first'
+        }).rename(columns={'Int_brut':'Total brut (€)','Int_net':'Total net (€)','Capital':'Capital (€)'})
+        totals_by_pl['Total brut (€)'] = totals_by_pl['Total brut (€)'].round(2)
+        totals_by_pl['Total net (€)'] = totals_by_pl['Total net (€)'].round(2)
+        st.dataframe(totals_by_pl, use_container_width=True, hide_index=True)
 
-    colm1, colm2, colm3, colm4 = st.columns(4)
-    total_capital = float(totals_by_pl['Capital (€)'].sum()) if not totals_by_pl.empty else 0.0
-    total_brut = float(totals_by_pl['Total brut (€)'].sum()) if not totals_by_pl.empty else 0.0
-    total_net = float(totals_by_pl['Total net (€)'].sum()) if not totals_by_pl.empty else 0.0
-    colm1.metric("Capital total", f"{total_capital:,.2f} €".replace(",", " "))
-    colm2.metric("Intérêts bruts totaux", f"{total_brut:,.2f} €".replace(",", " "))
-    colm3.metric("Intérêts nets totaux", f"{total_net:,.2f} €".replace(",", " "))
-    # Intérêt moyen net (%) sur capital
-    avg_net_rate = (total_net / total_capital * 100.0) if total_capital > 0 else 0.0
-    colm4.metric("Rendement net moyen", f"{avg_net_rate:.2f} %")
-
-    # =========================
-    # Graphiques d’évolution
-    # =========================
-    st.markdown("## Graphiques d’évolution")
-    st.caption("Évolutions mensuelles des intérêts (brut/net), par placement et cumulées.")
-    # Préparer séries
-    monthly_sorted = monthly.sort_values('Date')
-    # Par placement
-    st.markdown("### Par placement")
-    for nom_pl in monthly_sorted['Placement'].unique():
-        dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy()
-        dfp_display = dfp[['Date','Int_brut','Int_net']].set_index('Date')
-        st.line_chart(dfp_display, height=220, use_container_width=True)
-        # Cumul
-        dfp_cum = dfp_display.cumsum()
-        st.area_chart(dfp_cum.rename(columns={'Int_brut':'Brut cumulé','Int_net':'Net cumulé'}), height=180, use_container_width=True)
-
-    # Cumul global
-    st.markdown("### Cumul global")
-    glob = monthly_sorted.groupby('Date', as_index=True)[['Int_brut','Int_net']].sum()
-    st.line_chart(glob, height=260, use_container_width=True)
-    st.area_chart(glob.cumsum().rename(columns={'Int_brut':'Brut cumulé','Int_net':'Net cumulé'}), height=220, use_container_width=True)
+        colm1, colm2, colm3, colm4 = st.columns(4)
+        total_capital = float(totals_by_pl['Capital (€)'].sum())
+        total_brut = float(totals_by_pl['Total brut (€)'].sum())
+        total_net = float(totals_by_pl['Total net (€)'].sum())
+        colm1.metric("Capital total", f"{total_capital:,.2f} €".replace(",", " "))
+        colm2.metric("Intérêts bruts totaux", f"{total_brut:,.2f} €".replace(",", " "))
+        colm3.metric("Intérêts nets totaux", f"{total_net:,.2f} €".replace(",", " "))
+        avg_net_rate = (total_net / total_capital * 100.0) if total_capital > 0 else 0.0
+        colm4.metric("Rendement net moyen", f"{avg_net_rate:.2f} %")
+    else:
+        totals_by_pl = pd.DataFrame(columns=['Placement','Capital (€)','Total brut (€)','Total net (€)'])
 
     # =========================
-    # Export
+    # Graphiques Plotly
     # =========================
-    st.markdown("## Export")
-    # Export des lignes mensuelles et des totaux
-    csv_monthly = monthly.sort_values(['Date','Placement']).copy()
-    csv_monthly['Date'] = csv_monthly['Date'].astype(str)
-    csv_bytes = csv_monthly.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Télécharger les résultats mensuels (CSV)", data=csv_bytes, file_name="resultats_mensuels.csv", mime="text/csv")
+    st.markdown("## Graphiques d’évolution (Plotly)")
 
-    csv_totals = totals_by_pl.copy()
-    csv_totals_bytes = csv_totals.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Télécharger les totaux par placement (CSV)", data=csv_totals_bytes, file_name="totaux_par_placement.csv", mime="text/csv")
+    monthly_sorted = monthly.sort_values('Date').copy()
+    if not monthly_sorted.empty:
+        placements_list = monthly_sorted['Placement'].unique().tolist()
+        color_palette = px.colors.qualitative.Safe
+        color_map = {plc: color_palette[i % len(color_palette)] for i, plc in enumerate(placements_list)}
 
+        # Par placement - Intérêt mensuel (Brut vs Net)
+        st.markdown("### Par placement - Intérêt mensuel (Brut vs Net)")
+        for nom_pl in placements_list:
+            dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy()
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=dfp['Date'], y=dfp['Int_brut'],
+                name="Brut",
+                marker_color=color_map[nom_pl],
+                hovertemplate="Mois: %{x|%Y-%m}<br>Brut: %{y:.2f} €<extra></extra>"
+            ))
+            fig.add_trace(go.Bar(
+                x=dfp['Date'], y=dfp['Int_net'],
+                name="Net",
+                marker_color="rgba(0,0,0,0.45)",
+                hovertemplate="Mois: %{x|%Y-%m}<br>Net: %{y:.2f} €<extra></extra>"
+            ))
+            fig.update_layout(
+                barmode='group',
+                title_text=f"{nom_pl} - Intérêts mensuels",
+                legend_title_text="Type",
+                xaxis_title="Mois",
+                yaxis_title="€",
+                margin=dict(t=50, l=40, r=20, b=40),
+                height=360,
+                template="plotly_white"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Par placement - Cumul des intérêts (Net)
+        st.markdown("### Par placement - Cumul des intérêts (Net)")
+        for nom_pl in placements_list:
+            dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy().sort_values('Date')
+            dfp['Net_cumulé'] = dfp['Int_net'].cumsum()
+            fig = px.line(
+                dfp,
+                x='Date', y='Net_cumulé',
+                title=f"{nom_pl} - Net cumulé",
+                color_discrete_sequence=[color_map[nom_pl]],
+                labels={'Date': 'Mois', 'Net_cumulé':'€'}
+            )
+            fig.update_traces(mode='lines+markers', hovertemplate="Mois: %{x|%Y-%m}<br>Net cumulé: %{y:.2f} €<extra></extra>")
+            fig.update_layout(margin=dict(t=50, l=40, r=20, b=40), height=320, template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Cumul annuel par placement (couleur par placement)
+        st.markdown("### Cumul annuel par placement (couleur par placement)")
+        cum_by_pl = monthly_sorted.copy().sort_values(['Placement','Date'])
+        cum_by_pl['Net_cumulé'] = cum_by_pl.groupby('Placement')['Int_net'].cumsum()
+
+        fig_cumul = go.Figure()
+        for nom_pl in placements_list:
+            sub = cum_by_pl[cum_by_pl['Placement'] == nom_pl]
+            fig_cumul.add_trace(go.Scatter(
+                x=sub['Date'], y=sub['Net_cumulé'],
+                mode='lines+markers',
+                name=nom_pl,
+                line=dict(color=color_map[nom_pl], width=2),
+                marker=dict(size=6),
+                hovertemplate="Mois: %{x|%Y-%m}<br>Net cumulé: %{y:.2f} €<extra></extra>"
+            ))
+        fig_cumul.update_layout(
+            title_text="Évolution annuelle du net cumulé par placement",
+            xaxis_title="Mois",
+            yaxis_title="€",
+            legend_title_text="Placement",
+            margin=dict(t=50, l=40, r=20, b=40),
+            height=420,
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_cumul, use_container_width=True)
+
+        # Cumul global empilé (net)
+        st.markdown("### Cumul net global (aire empilée)")
+        stacked = monthly_sorted.copy()
+        stacked['Date_str'] = stacked['Date'].dt.strftime("%Y-%m")
+        pivot = stacked.pivot_table(index='Date_str', columns='Placement', values='Int_net', aggfunc='sum').fillna(0)
+        pivot_cum = pivot.cumsum()
+        fig_stack = go.Figure()
+        for nom_pl in placements_list:
+            fig_stack.add_trace(go.Scatter(
+                x=pivot_cum.index, y=pivot_cum[nom_pl],
+                mode='lines',
+                name=nom_pl,
+                line=dict(color=color_map[nom_pl], width=0.8),
+                stackgroup='one',
+                hovertemplate="Mois: %{x}<br>Cumul net: %{y:.2f} €<extra></extra>"
+            ))
+        fig_stack.update_layout(
+            title_text="Cumul net global (aire empilée)",
+            xaxis_title="Mois",
+            yaxis_title="€",
+            legend_title_text="Placement",
+            margin=dict(t=50, l=40, r=20, b=40),
+            height=420,
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_stack, use_container_width=True)
+    else:
+        st.info("Aucune donnée pour tracer les graphiques sur la période choisie.")
+
+    # =========================
+    # Export résultats
+    # =========================
+    st.markdown("## Export des résultats")
+    if not monthly.empty:
+        csv_monthly = monthly.sort_values(['Date','Placement']).copy()
+        csv_monthly['Date'] = csv_monthly['Date'].astype(str)
+        csv_bytes = csv_monthly.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Télécharger les résultats mensuels (CSV)", data=csv_bytes, file_name="resultats_mensuels.csv", mime="text/csv")
+
+        csv_totals = totals_by_pl.copy()
+        csv_totals_bytes = csv_totals.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Télécharger les totaux par placement (CSV)", data=csv_totals_bytes, file_name="totaux_par_placement.csv", mime="text/csv")
+    else:
+        st.caption("Exports désactivés: aucune donnée calculée.")
+
+# =========================
+# Export / Import des données d’entrée
+# =========================
 st.divider()
-with st.expander("Notes & limites"):
-    st.markdown(
-        "- Les intérêts sont calculés en prorata linéaire sur une base jours/an configurable (par défaut 365).\n"
-        "- La fiscalité est appliquée comme un pourcentage sur les intérêts (modèle simple). Pour des cas réels (prélèvements sociaux, exonérations, seuils), adapter au besoin.\n"
-        "- Les périodes de taux permettent de modéliser les changements de taux en cours d'année. En l’absence de période, le taux défaut s’applique.\n"
-        "- Les graphiques affichent les intérêts mensuels et leurs cumuls brut/net.\n"
-        "- Option avancée possible: règle des quinzaines (livrets FR) et dates de valeur bancaires."
-    )
 st.markdown("## Export / Import des données d’entrée")
-
 col_exp, col_imp = st.columns(2)
-
 with col_exp:
     if st.button("📤 Exporter les données d’entrée (CSV)"):
-        csv_bytes = export_inputs_to_csv(
+        csv_in_bytes = export_inputs_to_csv(
             st.session_state.placements,
             st.session_state.periode_globale
         )
         st.download_button(
             "Télécharger le CSV des données d’entrée",
-            data=csv_bytes,
+            data=csv_in_bytes,
             file_name="donnees_entree_livrets.csv",
             mime="text/csv",
             use_container_width=True
@@ -508,3 +565,17 @@ with col_imp:
             st.success("Données d’entrée importées avec succès.")
         except Exception as e:
             st.error(f"Erreur lors de l’import: {e}")
+
+# =========================
+# Notes
+# =========================
+st.divider()
+with st.expander("Notes & limites"):
+    st.markdown(
+        "- Intérêts calculés en prorata linéaire sur base jours/an configurable (par défaut 365).\n"
+        "- La fiscalité est appliquée comme un pourcentage unique sur les intérêts (modèle simple). Pour des cas réels (PFU 12.8% + PS 17.2%, exonérations), adapter au besoin.\n"
+        "- Les périodes de taux modélisent des changements en cours d'année; en l’absence de périodes, le taux défaut s’applique.\n"
+        "- Tableau mensuel enrichi avec nb_jours (taille du mois) et moyennes/jour brut & net.\n"
+        "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé.\n"
+        "- Possibles extensions: règle des quinzaines (livrets FR), intérêts composés, sauvegarde Google Sheets."
+    )
