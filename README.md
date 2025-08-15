@@ -70,12 +70,3 @@ Chaque modification poussée sur GitHub redéploie automatiquement l’applicati
 - Les **périodes de taux** permettent de modéliser des changements intra-annuels; sans période, le taux “défaut” s’applique à toute la période globale.
 - Pour les livrets réglementés (Livret A/LDDS), il est possible d’implémenter la **règle des quinzaines** et/ou des intérêts composés (capitalisation) en extension.
 
-## 🚀 Feuille de route (suggestions)
-- Règle des quinzaines (Livret A/LDDS).
-- Séparation Prélèvements sociaux / IR (PFU 12.8% + PS 17.2%) et gestion des exonérations.
-- Capitalisation mensuelle/journalière des intérêts (intérêts composés).
-- Sauvegarde automatique vers Google Sheets ou GitHub Gist.
-- Thèmes clair/sombre synchronisés avec Plotly.
-
----
-Fait pour une utilisation simple sur mobile et un déploiement rapide sur Streamlit Cloud.
