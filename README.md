@@ -1,19 +1,28 @@
-# 🎈 Blank app template
+# 💶 Visualiseur d'intérêts pour livrets bancaires
 
-A simple Streamlit app template for you to modify!
+Application Streamlit permettant d’ajouter plusieurs placements (nom, somme, taux) et de visualiser les intérêts **par jour**, **par mois** et **par an**, avec totaux et export CSV. Optimisée pour un usage mobile (iPhone).
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+## Déploiement sur Streamlit Cloud
+1. Créer un dépôt GitHub contenant ces fichiers: `app.py`, `requirements.txt`, `.streamlit/config.toml`.
+2. Aller sur Streamlit Community Cloud et cliquer “Deploy an app”.
+3. Sélectionner le dépôt, la branche et le fichier principal `app.py`.
+4. Lancer le déploiement; une URL publique sera fournie.
 
-### How to run it on your own machine
+## Utilisation sur iPhone
+- Ouvrir l’URL publique dans Safari.
+- Astuce: “Partager” > “Sur l’écran d’accueil” pour un accès façon application.
+- Les données restent en session du navigateur; utiliser le bouton CSV pour exporter.
 
-1. Install the requirements
+## Fonctionnalités
+- Ajout et édition de placements.
+- Calcul automatique: intérêt/jour, intérêt/mois, intérêt/an.
+- Totaux agrégés.
+- Export CSV.
 
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+## Limites et améliorations
+- Calcul simplifié (prorata linéaire).  
+- Possibles améliorations:
+  - Règle des quinzaines (Livret A/LDDS).
+  - Taux variables dans l’année.
+  - Fiscalité (PFU, PS) et affichage du net.
+  - Sauvegarde sur fichier/cloud.
