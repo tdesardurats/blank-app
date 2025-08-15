@@ -8,6 +8,156 @@ st.set_page_config(page_title="Livrets: intérêts, fiscalité et évolutions", 
 
 st.title("💶 Visualiseur d'intérêts avec fiscalité, périodes de taux et graphiques")
 st.caption("Ajoutez des placements, définissez les périodes de taux dans l’année, la fiscalité, et visualisez brut/net avec courbes d’évolution.")
+import io
+
+CSV_HEADER = [
+    "type_ligne",          # META ou PLACEMENT
+    "nom",                 # placement name
+    "somme",               # capital
+    "taux_defaut",         # default annual rate
+    "fisc_type",           # PFU|PERSONNALISE
+    "fisc_taux",           # tax rate %
+    "periode_debut",       # global or period start (YYYY-MM-DD)
+    "periode_fin",         # global or period end (YYYY-MM-DD)
+    "periode_taux"         # period rate (if any)
+]
+
+def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
+    """
+    Sérialise les placements + période globale au format CSV.
+    Schéma:
+    - 1 ligne META pour la période globale (type_ligne=META)
+    - N lignes PLACEMENT:
+      - Si pas de périodes: 1 ligne avec periode_debut/fin vides et taux_defaut rempli
+      - Si périodes: 1 ligne par période avec periode_debut/fin/taux, taux_defaut aussi présent pour info
+    """
+    rows = []
+    # Ligne META
+    rows.append({
+        "type_ligne": "META",
+        "nom": "",
+        "somme": "",
+        "taux_defaut": "",
+        "fisc_type": "",
+        "fisc_taux": "",
+        "periode_debut": periode_globale['debut'].strftime("%Y-%m-%d"),
+        "periode_fin": periode_globale['fin'].strftime("%Y-%m-%d"),
+        "periode_taux": ""
+    })
+
+    # Lignes PLACEMENT
+    for p in placements:
+        nom = p.get('nom', '')
+        somme = p.get('somme', 0.0)
+        taux_defaut = p.get('taux', 0.0)
+        fisc_type = p.get('fiscalite', {}).get('type', 'PFU')
+        fisc_taux = p.get('fiscalite', {}).get('taux', 30.0)
+        periods = p.get('periodes', [])
+        if not periods:
+            rows.append({
+                "type_ligne": "PLACEMENT",
+                "nom": nom,
+                "somme": somme,
+                "taux_defaut": taux_defaut,
+                "fisc_type": fisc_type,
+                "fisc_taux": fisc_taux,
+                "periode_debut": "",
+                "periode_fin": "",
+                "periode_taux": ""
+            })
+        else:
+            for per in periods:
+                rows.append({
+                    "type_ligne": "PLACEMENT",
+                    "nom": nom,
+                    "somme": somme,
+                    "taux_defaut": taux_defaut,
+                    "fisc_type": fisc_type,
+                    "fisc_taux": fisc_taux,
+                    "periode_debut": per.get('debut', ''),
+                    "periode_fin": per.get('fin', ''),
+                    "periode_taux": per.get('taux', '')
+                })
+
+    # Création CSV en mémoire
+    df = pd.DataFrame(rows, columns=CSV_HEADER)
+    return df.to_csv(index=False).encode("utf-8")
+
+
+def import_inputs_from_csv(file_bytes: bytes):
+    """
+    Parse le CSV et reconstruit (placements, periode_globale).
+    Retour: placements:list, periode_globale:dict
+    Règles:
+    - lire la 1ère ligne META (si plusieurs META, prendre la première trouvée)
+    - regrouper par 'nom' toutes les lignes PLACEMENT
+    """
+    df = pd.read_csv(io.BytesIO(file_bytes), dtype=str).fillna("")
+
+    # Valider colonnes minimales
+    missing = [c for c in CSV_HEADER if c not in df.columns]
+    if missing:
+        raise ValueError(f"Colonnes manquantes dans le CSV: {missing}")
+
+    # Période globale
+    meta = df[df['type_ligne'] == 'META']
+    if not meta.empty:
+        m0 = meta.iloc[0]
+        try:
+            g_debut = datetime.strptime(m0['periode_debut'], "%Y-%m-%d").date()
+            g_fin = datetime.strptime(m0['periode_fin'], "%Y-%m-%d").date()
+        except Exception:
+            # fallback: année courante si invalide
+            today = date.today()
+            g_debut = date(today.year, 1, 1)
+            g_fin = date(today.year, 12, 31)
+    else:
+        today = date.today()
+        g_debut = date(today.year, 1, 1)
+        g_fin = date(today.year, 12, 31)
+    periode_globale = {"debut": g_debut, "fin": g_fin}
+
+    # Placements
+    plc_rows = df[df['type_ligne'] == 'PLACEMENT'].copy()
+
+    # Normaliser types numériques
+    def to_float_safe(x, default=0.0):
+        try:
+            return float(x)
+        except Exception:
+            return default
+
+    placements_dict = {}
+    for _, r in plc_rows.iterrows():
+        nom = r['nom'].strip()
+        if not nom:
+            # ignorer lignes sans nom
+            continue
+        if nom not in placements_dict:
+            placements_dict[nom] = {
+                "nom": nom,
+                "somme": to_float_safe(r['somme'], 0.0),
+                "taux": to_float_safe(r['taux_defaut'], 0.0),
+                "fiscalite": {
+                    "type": r['fisc_type'] if r['fisc_type'] in ("PFU", "PERSONNALISE") else "PFU",
+                    "taux": to_float_safe(r['fisc_taux'], 30.0)
+                },
+                "periodes": []
+            }
+
+        # Période optionnelle
+        p_deb = r['periode_debut'].strip()
+        p_fin = r['periode_fin'].strip()
+        p_taux = r['periode_taux'].strip()
+        if p_deb and p_fin and p_taux:
+            placements_dict[nom]["periodes"].append({
+                "debut": p_deb,
+                "fin": p_fin,
+                "taux": to_float_safe(p_taux, placements_dict[nom]["taux"])
+            })
+
+    placements = list(placements_dict.values())
+    return placements, periode_globale
 
 # =========================
 # Helpers & Calculs
@@ -330,3 +480,31 @@ with st.expander("Notes & limites"):
         "- Les graphiques affichent les intérêts mensuels et leurs cumuls brut/net.\n"
         "- Option avancée possible: règle des quinzaines (livrets FR) et dates de valeur bancaires."
     )
+st.markdown("## Export / Import des données d’entrée")
+
+col_exp, col_imp = st.columns(2)
+
+with col_exp:
+    if st.button("📤 Exporter les données d’entrée (CSV)"):
+        csv_bytes = export_inputs_to_csv(
+            st.session_state.placements,
+            st.session_state.periode_globale
+        )
+        st.download_button(
+            "Télécharger le CSV des données d’entrée",
+            data=csv_bytes,
+            file_name="donnees_entree_livrets.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+with col_imp:
+    uploaded = st.file_uploader("📥 Importer un CSV de données d’entrée", type=["csv"])
+    if uploaded is not None:
+        try:
+            placements_imp, periode_imp = import_inputs_from_csv(uploaded.read())
+            st.session_state.placements = placements_imp
+            st.session_state.periode_globale = periode_imp
+            st.success("Données d’entrée importées avec succès.")
+        except Exception as e:
+            st.error(f"Erreur lors de l’import: {e}")
