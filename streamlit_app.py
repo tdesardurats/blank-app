@@ -244,6 +244,8 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
         df['nb_jours'] = df['Date'].apply(nb_jours_mois)
         df['Brut_moyen_jour'] = (df['Int_brut'] / df['nb_jours']).round(4)
         df['Net_moyen_jour'] = (df['Int_net'] / df['nb_jours']).round(4)
+        # Cast en datetime pour robustesse
+        df['Date'] = pd.to_datetime(df['Date'])
     return df
 
 # =========================
@@ -371,10 +373,15 @@ else:
         columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour']
     )
 
+    # Correctif: s'assurer que Date est bien datetime avant toute utilisation de .dt
+    if not monthly.empty:
+        monthly['Date'] = pd.to_datetime(monthly['Date'], errors='coerce')
+
     # Tableau mensuel enrichi
     st.markdown("### Résultats mensuels enrichis (brut/net + nb_jours + moyennes/jour)")
     monthly_display = monthly.sort_values(['Date','Placement']).copy()
     if not monthly_display.empty:
+        monthly_display['Date'] = pd.to_datetime(monthly_display['Date'], errors='coerce')
         monthly_display_fmt = monthly_display.copy()
         monthly_display_fmt['Date'] = monthly_display_fmt['Date'].dt.strftime("%Y-%m")
         st.dataframe(
@@ -414,6 +421,7 @@ else:
 
     monthly_sorted = monthly.sort_values('Date').copy()
     if not monthly_sorted.empty:
+        monthly_sorted['Date'] = pd.to_datetime(monthly_sorted['Date'], errors='coerce')
         placements_list = monthly_sorted['Placement'].unique().tolist()
         color_palette = px.colors.qualitative.Safe
         color_map = {plc: color_palette[i % len(color_palette)] for i, plc in enumerate(placements_list)}
@@ -525,7 +533,7 @@ else:
     st.markdown("## Export des résultats")
     if not monthly.empty:
         csv_monthly = monthly.sort_values(['Date','Placement']).copy()
-        csv_monthly['Date'] = csv_monthly['Date'].astype(str)
+        csv_monthly['Date'] = pd.to_datetime(csv_monthly['Date'], errors='coerce').dt.strftime("%Y-%m-%d")
         csv_bytes = csv_monthly.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Télécharger les résultats mensuels (CSV)", data=csv_bytes, file_name="resultats_mensuels.csv", mime="text/csv")
 
