@@ -7,16 +7,10 @@ from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 import io
 
-# =========================
-# Config page
-# =========================
 st.set_page_config(page_title="Livrets: intérêts, fiscalité, périodes & graphes", page_icon="💶", layout="wide")
 st.title("💶 Visualiseur d'intérêts avec fiscalité, périodes de taux, tableaux et graphes")
 st.caption("Ajoutez des placements, définissez les périodes de taux, la fiscalité, et visualisez brut/net avec tableaux et courbes. Export/Import CSV inclus.")
 
-# =========================
-# Utilitaires Export/Import des entrées
-# =========================
 CSV_HEADER = [
     "type_ligne", "nom", "somme", "taux_defaut", "fisc_type", "fisc_taux",
     "periode_debut", "periode_fin", "periode_taux"
@@ -24,15 +18,12 @@ CSV_HEADER = [
 
 def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
     rows = []
-    # Ligne META
     rows.append({
-        "type_ligne": "META",
-        "nom": "", "somme": "", "taux_defaut": "", "fisc_type": "", "fisc_taux": "",
+        "type_ligne": "META", "nom": "", "somme": "", "taux_defaut": "", "fisc_type": "", "fisc_taux": "",
         "periode_debut": periode_globale['debut'].strftime("%Y-%m-%d"),
         "periode_fin": periode_globale['fin'].strftime("%Y-%m-%d"),
         "periode_taux": ""
     })
-    # Lignes PLACEMENT
     for p in placements:
         nom, somme, taux_defaut = p.get('nom', ''), p.get('somme', 0.0), p.get('taux', 0.0)
         fisc_type = p.get('fiscalite', {}).get('type', 'PFU')
@@ -72,7 +63,6 @@ def import_inputs_from_csv(file_bytes: bytes):
         today = date.today()
         g_debut, g_fin = date(today.year,1,1), date(today.year,12,31)
     periode_globale = {"debut": g_debut, "fin": g_fin}
-
     plc_rows = df[df['type_ligne'] == 'PLACEMENT'].copy()
     def to_float_safe(x, default=0.0):
         try:
@@ -82,8 +72,7 @@ def import_inputs_from_csv(file_bytes: bytes):
     placements_dict = {}
     for _, r in plc_rows.iterrows():
         nom = r['nom'].strip()
-        if not nom:
-            continue
+        if not nom: continue
         if nom not in placements_dict:
             placements_dict[nom] = {
                 "nom": nom, "somme": to_float_safe(r['somme'], 0.0), "taux": to_float_safe(r['taux_defaut'], 0.0),
@@ -101,9 +90,6 @@ def import_inputs_from_csv(file_bytes: bytes):
     placements = list(placements_dict.values())
     return placements, periode_globale
 
-# =========================
-# Fonctions calcul
-# =========================
 def mois_range(start: date, end: date):
     cur, last = date(start.year, start.month, 1), date(end.year, end.month, 1)
     res = []
@@ -111,13 +97,17 @@ def mois_range(start: date, end: date):
         res.append(cur)
         cur = (cur + relativedelta(months=1))
     return res
+
 def nb_jours_mois(d: date): return (d + relativedelta(months=1) - d).days
+
 def clip_period_to_month(period_start: date, period_end: date, month_start: date) -> int:
     month_end = month_start + relativedelta(months=1) - relativedelta(days=1)
     s, e = max(period_start, month_start), min(period_end, month_end)
     if e < s: return 0
     return (e - s).days + 1
+
 def parse_date(s: str) -> date: return datetime.strptime(s, "%Y-%m-%d").date()
+
 def compute_brut_net_for_month(capital: float, taux_annuel: float, jours: int, base_jour: int, tax_rate: float):
     interet_brut = capital * (taux_annuel/100.0) * (jours / base_jour)
     interet_net = interet_brut * (1.0 - tax_rate/100.0)
@@ -165,13 +155,11 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
         df['Date'] = pd.to_datetime(df['Date'])
     return df
 
-# === État global
 if 'placements' not in st.session_state: st.session_state.placements = []
 if 'periode_globale' not in st.session_state:
     today = date.today()
     st.session_state.periode_globale = {'debut': date(today.year, 1, 1), 'fin': date(today.year, 12, 31)}
 
-# === Paramètres globaux
 with st.sidebar:
     st.header("Paramètres globaux")
     col_g1, col_g2 = st.columns(2)
@@ -183,14 +171,12 @@ with st.sidebar:
     st.caption("Base de calcul journalière (prorata linéaire)")
     base_jour = st.number_input("Base jours/an", min_value=360, max_value=366, value=365, step=1, help="365 par défaut. 360 possible selon conventions.")
 
-# === Saisie des placements
 st.subheader("Ajouter ou modifier un placement")
 with st.expander("Ajouter un placement"):
     col1, col2, col3 = st.columns([2,1,1])
     with col1: nom = st.text_input("Nom du placement", placeholder="Livret A")
     with col2: somme = st.number_input("Somme investie (€)", min_value=0.0, step=100.0, format="%.2f")
-    with col3:
-        taux_defaut = st.number_input("Taux annuel (%) - défaut", min_value=0.0, step=0.05, format="%.3f", help="Utilisé si aucune période de taux n’est ajoutée.")
+    with col3: taux_defaut = st.number_input("Taux annuel (%) - défaut", min_value=0.0, step=0.05, format="%.3f", help="Utilisé si aucune période de taux n’est ajoutée.")
     st.markdown("Fiscalité")
     colf1, colf2 = st.columns([1,1])
     with colf1: fiscalite_type = st.selectbox("Type de fiscalité", ["PFU (30%)", "Personnalisé"], index=0)
@@ -226,7 +212,6 @@ with st.expander("Ajouter un placement"):
             st.session_state.periodes_temp = []
             st.success(f"Placement « {placement['nom']} » enregistré.")
 
-# === Liste des placements et calculs
 st.subheader("Placements")
 if not st.session_state.placements:
     st.info("Aucun placement pour l’instant. Ajoutez-en via le panneau ci-dessus.")
@@ -264,7 +249,6 @@ else:
         totals_by_pl['Total brut (€)'] = totals_by_pl['Total brut (€)'].round(2)
         totals_by_pl['Total net (€)'] = totals_by_pl['Total net (€)'].round(2)
         st.dataframe(totals_by_pl, use_container_width=True, hide_index=True)
-
         colm1, colm2, colm3, colm4 = st.columns(4)
         total_capital = float(totals_by_pl['Capital (€)'].sum())
         total_brut = float(totals_by_pl['Total brut (€)'].sum())
@@ -277,9 +261,6 @@ else:
     else:
         totals_by_pl = pd.DataFrame(columns=['Placement','Capital (€)','Total brut (€)','Total net (€)'])
 
-    # =========================
-    # Classement par rentabilité nette
-    # =========================
     st.markdown("### Classement par rentabilité nette")
     if not monthly.empty and not totals_by_pl.empty:
         ranked = totals_by_pl.copy()
@@ -302,14 +283,12 @@ else:
             ranked.at[i, 'Rang'] = current_rank
         display_cols = ['Rang', 'Placement', 'Capital (€)', 'Total brut (€)', 'Total net (€)', 'Rendement net (%)', 'Part du net total (%)']
         st.dataframe(ranked[display_cols], use_container_width=True, hide_index=True)
-        # Mise en avant du Top 1
         top1 = ranked[ranked['Rang'] == 1]
         if not top1.empty:
             top_name = top1.iloc[0]['Placement']
             top_net = top1.iloc['Total net (€)']
             top_rend = top1.iloc['Rendement net (%)']
             st.success(f"🏆 Placement le plus rentable (net): {top_name} – {top_net:.2f} € net, rendement {top_rend:.2f}%")
-        # Graphique du classement (barres horizontales)
         ranked_plot = ranked.sort_values('Total net (€)', ascending=True)
         fig_rank = go.Figure(go.Bar(
             x=ranked_plot['Total net (€)'],
@@ -330,9 +309,6 @@ else:
     else:
         st.caption("Classement indisponible: pas de données calculées sur la période.")
 
-    # =========================
-    # Graphiques Plotly
-    # =========================
     st.markdown("## Graphiques d’évolution (Plotly)")
     monthly_sorted = monthly.sort_values('Date').copy()
     if not monthly_sorted.empty:
@@ -406,7 +382,6 @@ else:
     else:
         st.info("Aucune donnée pour tracer les graphiques sur la période choisie.")
 
-    # Export résultats
     st.markdown("## Export des résultats")
     if not monthly.empty:
         csv_monthly = monthly.sort_values(['Date','Placement']).copy()
@@ -419,7 +394,6 @@ else:
     else:
         st.caption("Exports désactivés: aucune donnée calculée.")
 
-# Export / Import des données d’entrée
 st.divider()
 st.markdown("## Export / Import des données d’entrée")
 col_exp, col_imp = st.columns(2)
@@ -448,7 +422,6 @@ with col_imp:
         except Exception as e:
             st.error(f"Erreur lors de l’import: {e}")
 
-# Notes
 st.divider()
 with st.expander("Notes & limites"):
     st.markdown(
