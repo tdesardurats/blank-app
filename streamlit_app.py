@@ -586,4 +586,5 @@ with st.expander("Notes & limites"):
         "- Tableau mensuel enrichi avec nb_jours (taille du mois) et moyennes/jour brut & net.\n"
         "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé.\n"
         "- Possibles extensions: règle des quinzaines (livrets FR), intérêts composés, sauvegarde Google Sheets."
+        
     )
