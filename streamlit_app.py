@@ -128,10 +128,11 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
         deb, fin = max(deb, start_global), min(fin, end_global)
         if deb <= fin: norm_periods.append({'debut': deb, 'fin': fin, 'taux': float(p['taux'])})
     if not norm_periods:
-        return pd.DataFrame(columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour'])
+        return pd.DataFrame(columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés', 'Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour'])
     months, rows = mois_range(start_global, end_global), []
     for m_start in months:
-        interet_brut_m, interet_net_m, taux_effectif_explicatif, jours_pond = 0.0, 0.0, [], 0
+        interet_brut_m, interet_net_m = 0.0, 0.0
+        taux_effectif_explicatif, jours_pond = [], 0
         for p in norm_periods:
             jours_in_mois = clip_period_to_month(p['debut'], p['fin'], m_start)
             if jours_in_mois <= 0: continue
@@ -240,7 +241,6 @@ else:
     else:
         st.info("Aucune donnée mensuelle sur la période sélectionnée.")
 
-    # Totaux par placement
     st.markdown("### Totaux par placement")
     if not monthly.empty:
         totals_by_pl = monthly.groupby('Placement', as_index=False).agg({
@@ -283,29 +283,6 @@ else:
             ranked.at[i, 'Rang'] = current_rank
         display_cols = ['Rang', 'Placement', 'Capital (€)', 'Total brut (€)', 'Total net (€)', 'Rendement net (%)', 'Part du net total (%)']
         st.dataframe(ranked[display_cols], use_container_width=True, hide_index=True)
-        top1 = ranked[ranked['Rang'] == 1]
-        if not top1.empty:
-            top_name = top1.iloc[0]['Placement']
-            top_net = top1.iloc['Total net (€)']
-            top_rend = top1.iloc['Rendement net (%)']
-            st.success(f"🏆 Placement le plus rentable (net): {top_name} – {top_net:.2f} € net, rendement {top_rend:.2f}%")
-        ranked_plot = ranked.sort_values('Total net (€)', ascending=True)
-        fig_rank = go.Figure(go.Bar(
-            x=ranked_plot['Total net (€)'],
-            y=ranked_plot['Placement'],
-            orientation='h',
-            marker_color='teal',
-            hovertemplate="%{y}<br>Net: %{x:.2f} €<extra></extra>"
-        ))
-        fig_rank.update_layout(
-            title_text="Classement (Total net) – du plus faible au plus élevé",
-            xaxis_title="€ net",
-            yaxis_title="Placement",
-            template="plotly_white",
-            height=420,
-            margin=dict(t=50, l=120, r=20, b=40)
-        )
-        st.plotly_chart(fig_rank, use_container_width=True)
     else:
         st.caption("Classement indisponible: pas de données calculées sur la période.")
 
@@ -345,90 +322,4 @@ else:
 
         st.markdown("### Cumul annuel par placement (couleur par placement)")
         cum_by_pl = monthly_sorted.copy().sort_values(['Placement','Date'])
-        cum_by_pl['Net_cumulé'] = cum_by_pl.groupby('Placement')['Int_net'].cumsum()
-        fig_cumul = go.Figure()
-        for nom_pl in placements_list:
-            sub = cum_by_pl[cum_by_pl['Placement'] == nom_pl]
-            fig_cumul.add_trace(go.Scatter(
-                x=sub['Date'], y=sub['Net_cumulé'], mode='lines+markers', name=nom_pl,
-                line=dict(color=color_map[nom_pl], width=2), marker=dict(size=6),
-                hovertemplate="Mois: %{x|%Y-%m}<br>Net cumulé: %{y:.2f} €<extra></extra>"
-            ))
-        fig_cumul.update_layout(
-            title_text="Évolution annuelle du net cumulé par placement",
-            xaxis_title="Mois", yaxis_title="€", legend_title_text="Placement",
-            margin=dict(t=50, l=40, r=20, b=40), height=420, template="plotly_white"
-        )
-        st.plotly_chart(fig_cumul, use_container_width=True)
-
-        st.markdown("### Cumul net global (aire empilée)")
-        stacked = monthly_sorted.copy()
-        stacked['Date_str'] = stacked['Date'].dt.strftime("%Y-%m")
-        pivot = stacked.pivot_table(index='Date_str', columns='Placement', values='Int_net', aggfunc='sum').fillna(0)
-        pivot_cum = pivot.cumsum()
-        fig_stack = go.Figure()
-        for nom_pl in placements_list:
-            fig_stack.add_trace(go.Scatter(
-                x=pivot_cum.index, y=pivot_cum[nom_pl], mode='lines', name=nom_pl,
-                line=dict(color=color_map[nom_pl], width=0.8), stackgroup='one',
-                hovertemplate="Mois: %{x}<br>Cumul net: %{y:.2f} €<extra></extra>"
-            ))
-        fig_stack.update_layout(
-            title_text="Cumul net global (aire empilée)",
-            xaxis_title="Mois", yaxis_title="€", legend_title_text="Placement",
-            margin=dict(t=50, l=40, r=20, b=40), height=420, template="plotly_white"
-        )
-        st.plotly_chart(fig_stack, use_container_width=True)
-    else:
-        st.info("Aucune donnée pour tracer les graphiques sur la période choisie.")
-
-    st.markdown("## Export des résultats")
-    if not monthly.empty:
-        csv_monthly = monthly.sort_values(['Date','Placement']).copy()
-        csv_monthly['Date'] = pd.to_datetime(csv_monthly['Date'], errors='coerce').dt.strftime("%Y-%m-%d")
-        csv_bytes = csv_monthly.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Télécharger les résultats mensuels (CSV)", data=csv_bytes, file_name="resultats_mensuels.csv", mime="text/csv")
-        csv_totals = totals_by_pl.copy()
-        csv_totals_bytes = csv_totals.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Télécharger les totaux par placement (CSV)", data=csv_totals_bytes, file_name="totaux_par_placement.csv", mime="text/csv")
-    else:
-        st.caption("Exports désactivés: aucune donnée calculée.")
-
-st.divider()
-st.markdown("## Export / Import des données d’entrée")
-col_exp, col_imp = st.columns(2)
-with col_exp:
-    if st.button("📤 Exporter les données d’entrée (CSV)"):
-        csv_in_bytes = export_inputs_to_csv(
-            st.session_state.placements,
-            st.session_state.periode_globale
-        )
-        st.download_button(
-            "Télécharger le CSV des données d’entrée",
-            data=csv_in_bytes,
-            file_name="donnees_entree_livrets.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
-with col_imp:
-    uploaded = st.file_uploader("📥 Importer un CSV de données d’entrée", type=["csv"])
-    if uploaded is not None:
-        try:
-            placements_imp, periode_imp = import_inputs_from_csv(uploaded.read())
-            st.session_state.placements = placements_imp
-            st.session_state.periode_globale = periode_imp
-            st.success("Données d’entrée importées avec succès.")
-        except Exception as e:
-            st.error(f"Erreur lors de l’import: {e}")
-
-st.divider()
-with st.expander("Notes & limites"):
-    st.markdown(
-        "- Intérêts calculés en prorata linéaire sur base jours/an configurable (par défaut 365).\n"
-        "- La fiscalité est appliquée comme un pourcentage unique sur les intérêts (modèle simple). Pour des cas réels (PFU 12.8% + PS 17.2%, exonérations), adapter au besoin.\n"
-        "- Les périodes de taux modélisent des changements en cours d'année; en l’absence de périodes, le taux défaut s’applique.\n"
-        "- Tableau mensuel enrichi avec nb_jours (taille du mois) et moyennes/jour brut & net.\n"
-        "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé, classement net.\n"
-        "- Possibles extensions: règle des quinzaines (livrets FR), intérêts composés, sauvegarde Google Sheets."
-    )
+        cum_by_pl['
