@@ -373,10 +373,11 @@ else:
         columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour']
     )
 
+    # Correctif: s'assurer que Date est bien datetime avant toute utilisation de .dt
     if not monthly.empty:
         monthly['Date'] = pd.to_datetime(monthly['Date'], errors='coerce')
 
-    # Résultats mensuels enrichis
+    # Tableau mensuel enrichi
     st.markdown("### Résultats mensuels enrichis (brut/net + nb_jours + moyennes/jour)")
     monthly_display = monthly.sort_values(['Date','Placement']).copy()
     if not monthly_display.empty:
@@ -413,7 +414,9 @@ else:
     else:
         totals_by_pl = pd.DataFrame(columns=['Placement','Capital (€)','Total brut (€)','Total net (€)'])
 
+    # =========================
     # Graphiques Plotly
+    # =========================
     st.markdown("## Graphiques d’évolution (Plotly)")
 
     monthly_sorted = monthly.sort_values('Date').copy()
@@ -423,33 +426,52 @@ else:
         color_palette = px.colors.qualitative.Safe
         color_map = {plc: color_palette[i % len(color_palette)] for i, plc in enumerate(placements_list)}
 
+        # Par placement - Intérêt mensuel (Brut vs Net)
         st.markdown("### Par placement - Intérêt mensuel (Brut vs Net)")
         for nom_pl in placements_list:
             dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy()
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=dfp['Date'], y=dfp['Int_brut'], name="Brut", marker_color=color_map[nom_pl],
-                                 hovertemplate="Mois: %{x|%Y-%m}<br>Brut: %{y:.2f} €<extra></extra>"))
-            fig.add_trace(go.Bar(x=dfp['Date'], y=dfp['Int_net'], name="Net", marker_color="rgba(0,0,0,0.45)",
-                                 hovertemplate="Mois: %{x|%Y-%m}<br>Net: %{y:.2f} €<extra></extra>"))
+            fig.add_trace(go.Bar(
+                x=dfp['Date'], y=dfp['Int_brut'],
+                name="Brut",
+                marker_color=color_map[nom_pl],
+                hovertemplate="Mois: %{x|%Y-%m}<br>Brut: %{y:.2f} €<extra></extra>"
+            ))
+            fig.add_trace(go.Bar(
+                x=dfp['Date'], y=dfp['Int_net'],
+                name="Net",
+                marker_color="rgba(0,0,0,0.45)",
+                hovertemplate="Mois: %{x|%Y-%m}<br>Net: %{y:.2f} €<extra></extra>"
+            ))
             fig.update_layout(
-                barmode='group', title_text=f"{nom_pl} - Intérêts mensuels", legend_title_text="Type",
-                xaxis_title="Mois", yaxis_title="€", margin=dict(t=50, l=40, r=20, b=40),
-                height=360, template="plotly_white"
+                barmode='group',
+                title_text=f"{nom_pl} - Intérêts mensuels",
+                legend_title_text="Type",
+                xaxis_title="Mois",
+                yaxis_title="€",
+                margin=dict(t=50, l=40, r=20, b=40),
+                height=360,
+                template="plotly_white"
             )
             st.plotly_chart(fig, use_container_width=True)
 
+        # Par placement - Cumul des intérêts (Net)
         st.markdown("### Par placement - Cumul des intérêts (Net)")
         for nom_pl in placements_list:
             dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy().sort_values('Date')
             dfp['Net_cumulé'] = dfp['Int_net'].cumsum()
             fig = px.line(
-                dfp, x='Date', y='Net_cumulé', title=f"{nom_pl} - Net cumulé",
-                color_discrete_sequence=[color_map[nom_pl]], labels={'Date': 'Mois', 'Net_cumulé':'€'}
+                dfp,
+                x='Date', y='Net_cumulé',
+                title=f"{nom_pl} - Net cumulé",
+                color_discrete_sequence=[color_map[nom_pl]],
+                labels={'Date': 'Mois', 'Net_cumulé':'€'}
             )
             fig.update_traces(mode='lines+markers', hovertemplate="Mois: %{x|%Y-%m}<br>Net cumulé: %{y:.2f} €<extra></extra>")
             fig.update_layout(margin=dict(t=50, l=40, r=20, b=40), height=320, template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
 
+        # Cumul annuel par placement (couleur par placement)
         st.markdown("### Cumul annuel par placement (couleur par placement)")
         cum_by_pl = monthly_sorted.copy().sort_values(['Placement','Date'])
         cum_by_pl['Net_cumulé'] = cum_by_pl.groupby('Placement')['Int_net'].cumsum()
@@ -458,17 +480,25 @@ else:
         for nom_pl in placements_list:
             sub = cum_by_pl[cum_by_pl['Placement'] == nom_pl]
             fig_cumul.add_trace(go.Scatter(
-                x=sub['Date'], y=sub['Net_cumulé'], mode='lines+markers', name=nom_pl,
-                line=dict(color=color_map[nom_pl], width=2), marker=dict(size=6),
+                x=sub['Date'], y=sub['Net_cumulé'],
+                mode='lines+markers',
+                name=nom_pl,
+                line=dict(color=color_map[nom_pl], width=2),
+                marker=dict(size=6),
                 hovertemplate="Mois: %{x|%Y-%m}<br>Net cumulé: %{y:.2f} €<extra></extra>"
             ))
         fig_cumul.update_layout(
             title_text="Évolution annuelle du net cumulé par placement",
-            xaxis_title="Mois", yaxis_title="€", legend_title_text="Placement",
-            margin=dict(t=50, l=40, r=20, b=40), height=420, template="plotly_white"
+            xaxis_title="Mois",
+            yaxis_title="€",
+            legend_title_text="Placement",
+            margin=dict(t=50, l=40, r=20, b=40),
+            height=420,
+            template="plotly_white"
         )
         st.plotly_chart(fig_cumul, use_container_width=True)
 
+        # Cumul global empilé (net)
         st.markdown("### Cumul net global (aire empilée)")
         stacked = monthly_sorted.copy()
         stacked['Date_str'] = stacked['Date'].dt.strftime("%Y-%m")
@@ -477,20 +507,29 @@ else:
         fig_stack = go.Figure()
         for nom_pl in placements_list:
             fig_stack.add_trace(go.Scatter(
-                x=pivot_cum.index, y=pivot_cum[nom_pl], mode='lines', name=nom_pl,
-                line=dict(color=color_map[nom_pl], width=0.8), stackgroup='one',
+                x=pivot_cum.index, y=pivot_cum[nom_pl],
+                mode='lines',
+                name=nom_pl,
+                line=dict(color=color_map[nom_pl], width=0.8),
+                stackgroup='one',
                 hovertemplate="Mois: %{x}<br>Cumul net: %{y:.2f} €<extra></extra>"
             ))
         fig_stack.update_layout(
             title_text="Cumul net global (aire empilée)",
-            xaxis_title="Mois", yaxis_title="€", legend_title_text="Placement",
-            margin=dict(t=50, l=40, r=20, b=40), height=420, template="plotly_white"
+            xaxis_title="Mois",
+            yaxis_title="€",
+            legend_title_text="Placement",
+            margin=dict(t=50, l=40, r=20, b=40),
+            height=420,
+            template="plotly_white"
         )
         st.plotly_chart(fig_stack, use_container_width=True)
     else:
         st.info("Aucune donnée pour tracer les graphiques sur la période choisie.")
 
+    # =========================
     # Export résultats
+    # =========================
     st.markdown("## Export des résultats")
     if not monthly.empty:
         csv_monthly = monthly.sort_values(['Date','Placement']).copy()
@@ -512,11 +551,21 @@ st.markdown("## Export / Import des données d’entrée")
 col_exp, col_imp = st.columns(2)
 with col_exp:
     if st.button("📤 Exporter les données d’entrée (CSV)"):
-        csv_in_bytes = export_inputs_to_csv(st.session_state.placements, st.session_state.periode_globale)
-        st.download_button("Télécharger le CSV des données d’entrée", data=csv_in_bytes, file_name="donnees_entree_livrets.csv", mime="text/csv")
+        csv_in_bytes = export_inputs_to_csv(
+            st.session_state.placements,
+            st.session_state.periode_globale
+        )
+        st.download_button(
+            "Télécharger le CSV des données d’entrée",
+            data=csv_in_bytes,
+            file_name="donnees_entree_livrets.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
 with col_imp:
     uploaded = st.file_uploader("📥 Importer un CSV de données d’entrée", type=["csv"])
-    if uploaded:
+    if uploaded is not None:
         try:
             placements_imp, periode_imp = import_inputs_from_csv(uploaded.read())
             st.session_state.placements = placements_imp
@@ -526,7 +575,7 @@ with col_imp:
             st.error(f"Erreur lors de l’import: {e}")
 
 # =========================
-# Notes & limites
+# Notes
 # =========================
 st.divider()
 with st.expander("Notes & limites"):
