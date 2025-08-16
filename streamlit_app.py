@@ -415,6 +415,66 @@ else:
         totals_by_pl = pd.DataFrame(columns=['Placement','Capital (€)','Total brut (€)','Total net (€)'])
 
     # =========================
+    # Classement par rentabilité nette
+    # =========================
+    st.markdown("### Classement par rentabilité nette")
+    if not monthly.empty and not totals_by_pl.empty:
+        ranked = totals_by_pl.copy()
+        # Rendement net (%) = Total net / Capital * 100
+        ranked['Rendement net (%)'] = ranked.apply(
+            lambda r: (r['Total net (€)'] / r['Capital (€)'] * 100.0) if r['Capital (€)'] > 0 else 0.0,
+            axis=1
+        ).round(2)
+        # Part du net total (%)
+        total_net_all = ranked['Total net (€)'].sum()
+        ranked['Part du net total (%)'] = ranked['Total net (€)'].apply(
+            lambda x: (x / total_net_all * 100.0) if total_net_all > 0 else 0.0
+        ).round(2)
+        # Tri par Total net décroissant
+        ranked = ranked.sort_values('Total net (€)', ascending=False).reset_index(drop=True)
+        # Rang avec gestion des ex æquo
+        ranked['Rang'] = None
+        current_rank = 0
+        last_value = None
+        for i, v in enumerate(ranked['Total net (€)'].tolist()):
+            if last_value is None or v < last_value:
+                current_rank = i + 1
+                last_value = v
+            ranked.at[i, 'Rang'] = current_rank
+
+        display_cols = ['Rang', 'Placement', 'Capital (€)', 'Total brut (€)', 'Total net (€)', 'Rendement net (%)', 'Part du net total (%)']
+        st.dataframe(ranked[display_cols], use_container_width=True, hide_index=True)
+
+        # Mise en avant du Top 1
+        top1 = ranked[ranked['Rang'] == 1]
+        if not top1.empty:
+            top_name = top1.iloc[0]['Placement']
+            top_net = top1.iloc['Total net (€)']
+            top_rend = top1.iloc['Rendement net (%)']
+            st.success(f"🏆 Placement le plus rentable (net): {top_name} – {top_net:.2f} € net, rendement {top_rend:.2f}%")
+
+        # Graphique du classement (barres horizontales)
+        ranked_plot = ranked.sort_values('Total net (€)', ascending=True)
+        fig_rank = go.Figure(go.Bar(
+            x=ranked_plot['Total net (€)'],
+            y=ranked_plot['Placement'],
+            orientation='h',
+            marker_color='teal',
+            hovertemplate="%{y}<br>Net: %{x:.2f} €<extra></extra>"
+        ))
+        fig_rank.update_layout(
+            title_text="Classement (Total net) – du plus faible au plus élevé",
+            xaxis_title="€ net",
+            yaxis_title="Placement",
+            template="plotly_white",
+            height=420,
+            margin=dict(t=50, l=120, r=20, b=40)
+        )
+        st.plotly_chart(fig_rank, use_container_width=True)
+    else:
+        st.caption("Classement indisponible: pas de données calculées sur la période.")
+
+    # =========================
     # Graphiques Plotly
     # =========================
     st.markdown("## Graphiques d’évolution (Plotly)")
@@ -498,7 +558,7 @@ else:
         )
         st.plotly_chart(fig_cumul, use_container_width=True)
 
-        # Cumul global empilé (net)
+        # Cumul net global (aire empilée)
         st.markdown("### Cumul net global (aire empilée)")
         stacked = monthly_sorted.copy()
         stacked['Date_str'] = stacked['Date'].dt.strftime("%Y-%m")
@@ -584,6 +644,6 @@ with st.expander("Notes & limites"):
         "- La fiscalité est appliquée comme un pourcentage unique sur les intérêts (modèle simple). Pour des cas réels (PFU 12.8% + PS 17.2%, exonérations), adapter au besoin.\n"
         "- Les périodes de taux modélisent des changements en cours d'année; en l’absence de périodes, le taux défaut s’applique.\n"
         "- Tableau mensuel enrichi avec nb_jours (taille du mois) et moyennes/jour brut & net.\n"
-        "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé.\n"
+        "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé, classement net.\n"
         "- Possibles extensions: règle des quinzaines (livrets FR), intérêts composés, sauvegarde Google Sheets."
     )
