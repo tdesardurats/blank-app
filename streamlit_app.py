@@ -322,4 +322,77 @@ else:
 
         st.markdown("### Cumul annuel par placement (couleur par placement)")
         cum_by_pl = monthly_sorted.copy().sort_values(['Placement','Date'])
-        cum_by_pl['
+        cum_by_pl['Net_cumulé'] = cum_by_pl.groupby('Placement')['Int_net'].cumsum()
+        fig_cumul = go.Figure()
+        for nom_pl in placements_list:
+            sub = cum_by_pl[cum_by_pl['Placement'] == nom_pl]
+            fig_cumul.add_trace(go.Scatter(
+                x=sub['Date'], y=sub['Net_cumulé'], mode='lines+markers', name=nom_pl,
+                line=dict(color=color_map[nom_pl], width=2), marker=dict(size=6),
+                hovertemplate="Mois: %{x|%Y-%m}<br>Net cumulé: %{y:.2f} €<extra></extra>"
+            ))
+        fig_cumul.update_layout(
+            title_text="Évolution annuelle du net cumulé par placement",
+            xaxis_title="Mois", yaxis_title="€", legend_title_text="Placement",
+            margin=dict(t=50, l=40, r=20, b=40), height=420, template="plotly_white"
+        )
+        st.plotly_chart(fig_cumul, use_container_width=True)
+
+        st.markdown("### Cumul net global (aire empilée)")
+        stacked = monthly_sorted.copy()
+        stacked['Date_str'] = stacked['Date'].dt.strftime("%Y-%m")
+        pivot = stacked.pivot_table(index='Date_str', columns='Placement', values='Int_net', aggfunc='sum').fillna(0)
+        pivot_cum = pivot.cumsum()
+        fig_stack = go.Figure()
+        for nom_pl in placements_list:
+            fig_stack.add_trace(go.Scatter(
+                x=pivot_cum.index, y=pivot_cum[nom_pl], mode='lines', name=nom_pl,
+                line=dict(color=color_map[nom_pl], width=0.8), stackgroup='one',
+                hovertemplate="Mois: %{x}<br>Cumul net: %{y:.2f} €<extra></extra>"
+            ))
+        fig_stack.update_layout(
+            title_text="Cumul net global (aire empilée)",
+            xaxis_title="Mois", yaxis_title="€", legend_title_text="Placement",
+            margin=dict(t=50, l=40, r=20, b=40), height=420, template="plotly_white"
+        )
+        st.plotly_chart(fig_stack, use_container_width=True)
+    else:
+        st.info("Aucune donnée pour tracer les graphiques sur la période choisie.")
+
+st.divider()
+st.markdown("## Export / Import des données d’entrée")
+col_exp, col_imp = st.columns(2)
+with col_exp:
+    if st.button("📤 Exporter les données d’entrée (CSV)"):
+        csv_in_bytes = export_inputs_to_csv(
+            st.session_state.placements,
+            st.session_state.periode_globale
+        )
+        st.download_button(
+            "Télécharger le CSV des données d’entrée",
+            data=csv_in_bytes,
+            file_name="donnees_entree_livrets.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+with col_imp:
+    uploaded = st.file_uploader("📥 Importer un CSV de données d’entrée", type=["csv"])
+    if uploaded is not None:
+        try:
+            placements_imp, periode_imp = import_inputs_from_csv(uploaded.read())
+            st.session_state.placements = placements_imp
+            st.session_state.periode_globale = periode_imp
+            st.success("Données d’entrée importées avec succès.")
+        except Exception as e:
+            st.error(f"Erreur lors de l’import: {e}")
+
+st.divider()
+with st.expander("Notes & limites"):
+    st.markdown(
+        "- Intérêts calculés en prorata linéaire sur base jours/an configurable (par défaut 365).\n"
+        "- La fiscalité est appliquée comme un pourcentage unique sur les intérêts (modèle simple). Pour des cas réels (PFU 12.8% + PS 17.2%, exonérations), adapter au besoin.\n"
+        "- Les périodes de taux modélisent des changements en cours d'année; en l’absence de périodes, le taux défaut s’applique.\n"
+        "- Tableau mensuel enrichi avec nb_jours (taille du mois) et moyennes/jour brut & net.\n"
+        "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé, classement net.\n"
+        "- Possibles extensions: règle des quinzaines (livrets FR), intérêts composés, sauvegarde Google Sheets."
+    )
