@@ -12,19 +12,28 @@ import uuid
 # Config page
 # =========================
 st.set_page_config(page_title="Livrets: intérêts, fiscalité, périodes & graphes", page_icon="💶", layout="wide")
+
 st.title("💶 Visualiseur d'intérêts avec fiscalité, périodes de taux, tableaux et graphes")
-st.caption("Ajoutez des placements, définissez les périodes de taux, éditez après import, et visualisez brut/net. Export/Import CSV inclus.")
+st.caption("Ajoutez des placements, définissez les périodes de taux, la fiscalité, éditez après import, et visualisez brut/net. Export/Import CSV inclus.")
 
 # =========================
 # Utilitaires Export/Import des entrées
 # =========================
 CSV_HEADER = [
-    "type_ligne", "nom", "somme", "taux_defaut", "fisc_type", "fisc_taux",
-    "periode_debut", "periode_fin", "periode_taux"
+    "type_ligne",          # META ou PLACEMENT
+    "nom",                 # placement name
+    "somme",               # capital
+    "taux_defaut",         # default annual rate
+    "fisc_type",           # PFU|PERSONNALISE
+    "fisc_taux",           # tax rate %
+    "periode_debut",       # global or period start (YYYY-MM-DD)
+    "periode_fin",         # global or period end (YYYY-MM-DD)
+    "periode_taux"         # period rate (if any)
 ]
 
 def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
     rows = []
+    # Ligne META
     rows.append({
         "type_ligne": "META",
         "nom": "",
@@ -36,6 +45,8 @@ def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
         "periode_fin": periode_globale['fin'].strftime("%Y-%m-%d"),
         "periode_taux": ""
     })
+
+    # Lignes PLACEMENT
     for p in placements:
         nom = p.get('nom', '')
         somme = p.get('somme', 0.0)
@@ -45,17 +56,30 @@ def export_inputs_to_csv(placements: list, periode_globale: dict) -> bytes:
         periods = p.get('periodes', [])
         if not periods:
             rows.append({
-                "type_ligne": "PLACEMENT", "nom": nom, "somme": somme, "taux_defaut": taux_defaut,
-                "fisc_type": fisc_type, "fisc_taux": fisc_taux,
-                "periode_debut": "", "periode_fin": "", "periode_taux": ""
+                "type_ligne": "PLACEMENT",
+                "nom": nom,
+                "somme": somme,
+                "taux_defaut": taux_defaut,
+                "fisc_type": fisc_type,
+                "fisc_taux": fisc_taux,
+                "periode_debut": "",
+                "periode_fin": "",
+                "periode_taux": ""
             })
         else:
             for per in periods:
                 rows.append({
-                    "type_ligne": "PLACEMENT", "nom": nom, "somme": somme, "taux_defaut": taux_defaut,
-                    "fisc_type": fisc_type, "fisc_taux": fisc_taux,
-                    "periode_debut": per.get('debut', ''), "periode_fin": per.get('fin', ''), "periode_taux": per.get('taux', '')
+                    "type_ligne": "PLACEMENT",
+                    "nom": nom,
+                    "somme": somme,
+                    "taux_defaut": taux_defaut,
+                    "fisc_type": fisc_type,
+                    "fisc_taux": fisc_taux,
+                    "periode_debut": per.get('debut', ''),
+                    "periode_fin": per.get('fin', ''),
+                    "periode_taux": per.get('taux', '')
                 })
+
     df = pd.DataFrame(rows, columns=CSV_HEADER)
     return df.to_csv(index=False).encode("utf-8")
 
@@ -65,6 +89,7 @@ def import_inputs_from_csv(file_bytes: bytes):
     if missing:
         raise ValueError(f"Colonnes manquantes dans le CSV: {missing}")
 
+    # Période globale
     meta = df[df['type_ligne'] == 'META']
     if not meta.empty:
         m0 = meta.iloc[0]
@@ -81,13 +106,15 @@ def import_inputs_from_csv(file_bytes: bytes):
         g_fin = date(today.year, 12, 31)
     periode_globale = {"debut": g_debut, "fin": g_fin}
 
+    # Placements
+    plc_rows = df[df['type_ligne'] == 'PLACEMENT'].copy()
+
     def to_float_safe(x, default=0.0):
         try:
             return float(str(x).replace(",", "."))
         except Exception:
             return default
 
-    plc_rows = df[df['type_ligne'] == 'PLACEMENT'].copy()
     placements_dict = {}
     for _, r in plc_rows.iterrows():
         nom = r['nom'].strip()
@@ -114,6 +141,7 @@ def import_inputs_from_csv(file_bytes: bytes):
                 "fin": p_fin,
                 "taux": to_float_safe(p_taux, placements_dict[nom]["taux"])
             })
+
     placements = list(placements_dict.values())
     return placements, periode_globale
 
@@ -214,9 +242,11 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
     if not df.empty:
         df['Int_brut'] = df['Int_brut'].round(2)
         df['Int_net'] = df['Int_net'].round(2)
+        # Ajoute nb_jours du mois et moyennes/jour
         df['nb_jours'] = df['Date'].apply(nb_jours_mois)
         df['Brut_moyen_jour'] = (df['Int_brut'] / df['nb_jours']).round(4)
         df['Net_moyen_jour'] = (df['Int_net'] / df['nb_jours']).round(4)
+        # Cast en datetime pour robustesse
         df['Date'] = pd.to_datetime(df['Date'])
     return df
 
@@ -225,6 +255,7 @@ def build_monthly_schedule(placement: dict, start_global: date, end_global: date
 # =========================
 if 'placements' not in st.session_state:
     st.session_state.placements = []
+
 if 'periode_globale' not in st.session_state:
     today = date.today()
     st.session_state.periode_globale = {'debut': date(today.year, 1, 1), 'fin': date(today.year, 12, 31)}
@@ -324,8 +355,10 @@ st.subheader("Modifier/Supprimer les placements existants")
 def placements_to_editor_df(pls: list) -> pd.DataFrame:
     rows = []
     for p in pls:
+        if "uid" not in p or not p["uid"]:
+            p["uid"] = str(uuid.uuid4())
         rows.append({
-            "uid": p.get("uid", str(uuid.uuid4())),
+            "uid": p["uid"],
             "Nom": p['nom'],
             "Somme (€)": float(p['somme']),
             "Taux défaut (%)": float(p['taux']),
@@ -343,42 +376,38 @@ def normalize_float(x, default=0.0):
         return default
 
 def apply_editor_changes():
-    # Pattern recommandé: lire st.session_state[key]["edited_rows"/"added_rows"/"deleted_rows"] et mettre à jour la source
-    # Références: [2] (persistance via on_change) et [7] (workaround officiel de la communauté)
     edits = st.session_state.get("edits", {})
     base_df: pd.DataFrame = st.session_state.get("editor_df", pd.DataFrame()).copy()
     if base_df.empty:
         return
 
-    # Appliquer les cellules modifiées
+    # Appliquer cellules modifiées
     for row_idx, change in edits.get("edited_rows", {}).items():
         for col, val in change.items():
             base_df.at[row_idx, col] = val
 
     # Lignes ajoutées
     for added in edits.get("added_rows", []):
-        # added est un dict avec colonnes -> valeurs (potentiellement None)
         new_row = {c: added.get(c, None) for c in base_df.columns}
         if not new_row.get("uid"):
             new_row["uid"] = str(uuid.uuid4())
         base_df.loc[len(base_df)] = new_row
 
-    # Lignes supprimées: indices dans le df affiché
+    # Lignes supprimées
     deleted = edits.get("deleted_rows", [])
     if deleted:
         base_df = base_df.drop(index=deleted).reset_index(drop=True)
 
-    # Sauver le df "source" de l'éditeur
+    # Sauver le DF modifié
     st.session_state["editor_df"] = base_df
 
-    # Re-convertir vers st.session_state.placements de façon robuste via uid
+    # Reconstruire placements via uid
     uid_to_periods = {p["uid"]: p.get("periodes", []) for p in st.session_state.placements}
     new_placements = []
     for _, r in base_df.iterrows():
         uid = str(r.get("uid"))
         nom = str(r.get("Nom") or "").strip()
         if not nom:
-            # ignorer lignes sans nom
             continue
         somme = normalize_float(r.get("Somme (€)"), 0.0)
         taux_def = normalize_float(r.get("Taux défaut (%)"), 0.0)
@@ -398,12 +427,11 @@ def apply_editor_changes():
     st.session_state.placements = new_placements
     st.toast("Modifications appliquées.", icon="✅")
 
-# Construire le DF pour l’éditeur à chaque run à partir de l’état
+# Construire DF pour éditeur
 editor_df = placements_to_editor_df(st.session_state.placements)
-# Mémoriser une copie dans session_state pour que le callback puisse lire/écrire
 st.session_state["editor_df"] = editor_df.copy()
 
-edited_view = st.data_editor(
+st.data_editor(
     editor_df,
     key="edits",
     use_container_width=True,
@@ -418,30 +446,44 @@ edited_view = st.data_editor(
         "Fiscalité (%)": st.column_config.NumberColumn("Fiscalité (%)", step=0.5, format="%.2f"),
         "Nb périodes": st.column_config.Column("Nb périodes", disabled=True),
     },
-    on_change=apply_editor_changes,  # applique immédiatement les changements
+    on_change=apply_editor_changes,
 )
 
 # =========================
-# Édition des périodes par placement (fiable)
+# Édition des périodes par placement (sélection stable)
 # =========================
 st.markdown("### Éditer les périodes d’un placement")
-if st.session_state.placements:
-    choix = st.selectbox("Choisir le placement", options=[f"{p['nom']} ({p['uid'][:8]})" for p in st.session_state.placements], key="period_sel")
-    # retrouver le placement choisi
-    sel_uid = choix.split("(")[-1].strip(")") if "(" in choix else None
-    sel_uid = sel_uid if sel_uid else ""
-    sel_uid = sel_uid.strip()
-    chosen = None
+
+def ensure_uid_on_placements():
+    changed = False
     for p in st.session_state.placements:
-        if p['uid'].startswith(sel_uid):
-            chosen = p
-            break
-    if not chosen:
-        # fallback: par nom si découpage uid fail
-        for p in st.session_state.placements:
-            if p['nom'] in choix:
-                chosen = p
-                break
+        if "uid" not in p or not p["uid"]:
+            p["uid"] = str(uuid.uuid4())
+            changed = True
+    return changed
+
+if st.session_state.placements:
+    if ensure_uid_on_placements():
+        st.rerun()
+
+    uid_options = [p["uid"] for p in st.session_state.placements]
+    uid_to_label = {p["uid"]: f"{p['nom']} — {p['uid'][:8]}" for p in st.session_state.placements}
+
+    if "period_uid_selected" not in st.session_state or st.session_state.get("period_uid_selected") not in uid_options:
+        st.session_state.period_uid_selected = uid_options[0] if uid_options else None
+
+    selected_uid = st.selectbox(
+        "Choisir le placement",
+        options=uid_options,
+        index=uid_options.index(st.session_state.period_uid_selected) if st.session_state.period_uid_selected in uid_options else 0,
+        format_func=lambda u: uid_to_label.get(u, u),
+        key="period_select_uid_controlled"
+    )
+
+    if selected_uid != st.session_state.period_uid_selected:
+        st.session_state.period_uid_selected = selected_uid
+
+    chosen = next((p for p in st.session_state.placements if p["uid"] == st.session_state.period_uid_selected), None)
 
     if chosen:
         st.write(f"Périodes actuelles pour « {chosen['nom']} »")
@@ -450,15 +492,16 @@ if st.session_state.placements:
             periods_df = pd.DataFrame(columns=["debut","fin","taux"])
         st.dataframe(periods_df, use_container_width=True, hide_index=True)
 
-        with st.form(f"edit_periods_form_{chosen['uid']}"):
-            st.markdown("Ajouter/Modifier une période")
+        form_key = f"edit_periods_form_{chosen['uid']}"
+        with st.form(form_key):
             c1, c2, c3 = st.columns(3)
             with c1:
-                new_deb = st.date_input("Début", value=st.session_state.periode_globale['debut'])
+                new_deb = st.date_input("Début", value=st.session_state.periode_globale['debut'], key=f"deb_{chosen['uid']}")
             with c2:
-                new_fin = st.date_input("Fin", value=st.session_state.periode_globale['fin'])
+                new_fin = st.date_input("Fin", value=st.session_state.periode_globale['fin'], key=f"fin_{chosen['uid']}")
             with c3:
-                new_taux = st.number_input("Taux (%)", min_value=0.0, step=0.05, format="%.3f")
+                new_taux = st.number_input("Taux (%)", min_value=0.0, step=0.05, format="%.3f", key=f"taux_{chosen['uid']}")
+
             submitted_add = st.form_submit_button("Ajouter cette période")
             if submitted_add:
                 if new_deb <= new_fin:
@@ -472,10 +515,13 @@ if st.session_state.placements:
                 else:
                     st.error("Début doit précéder fin.")
 
-        # Supprimer une période par index
         if chosen.get("periodes"):
-            del_idx = st.number_input("Supprimer la période n° (index commençant à 0)", min_value=0, max_value=len(chosen["periodes"])-1, step=1, value=0)
-            if st.button("Supprimer cette période"):
+            del_idx = st.number_input(
+                "Supprimer la période n° (index commençant à 0)",
+                min_value=0, max_value=len(chosen["periodes"])-1, step=1, value=0,
+                key=f"del_idx_{chosen['uid']}"
+            )
+            if st.button("Supprimer cette période", key=f"btn_del_period_{chosen['uid']}"):
                 try:
                     chosen["periodes"].pop(int(del_idx))
                     st.success("Période supprimée.")
@@ -483,7 +529,7 @@ if st.session_state.placements:
                 except Exception:
                     st.error("Index invalide.")
 
-        if st.button("Vider toutes les périodes de ce placement"):
+        if st.button("Vider toutes les périodes de ce placement", key=f"btn_clear_periods_{chosen['uid']}"):
             chosen["periodes"] = []
             st.success("Toutes les périodes ont été supprimées.")
             st.rerun()
@@ -518,9 +564,11 @@ else:
         columns=['Placement','Date','Capital','Taux(%)','Jours_pondérés','Int_brut','Int_net','nb_jours','Brut_moyen_jour','Net_moyen_jour']
     )
 
+    # Correctif: s'assurer que Date est bien datetime avant toute utilisation de .dt
     if not monthly.empty:
         monthly['Date'] = pd.to_datetime(monthly['Date'], errors='coerce')
 
+    # Tableau mensuel enrichi
     st.markdown("### Résultats mensuels enrichis (brut/net + nb_jours + moyennes/jour)")
     monthly_display = monthly.sort_values(['Date','Placement']).copy()
     if not monthly_display.empty:
@@ -535,6 +583,7 @@ else:
     else:
         st.info("Aucune donnée mensuelle sur la période sélectionnée.")
 
+    # Totaux par placement
     st.markdown("### Totaux par placement")
     if not monthly.empty:
         totals_by_pl = monthly.groupby('Placement', as_index=False).agg({
@@ -568,6 +617,7 @@ else:
         color_palette = px.colors.qualitative.Safe
         color_map = {plc: color_palette[i % len(color_palette)] for i, plc in enumerate(placements_list)}
 
+        # Par placement - Intérêt mensuel (Brut vs Net)
         st.markdown("### Par placement - Intérêt mensuel (Brut vs Net)")
         for nom_pl in placements_list:
             dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy()
@@ -596,12 +646,14 @@ else:
             )
             st.plotly_chart(fig, use_container_width=True)
 
+        # Par placement - Cumul des intérêts (Net)
         st.markdown("### Par placement - Cumul des intérêts (Net)")
         for nom_pl in placements_list:
             dfp = monthly_sorted[monthly_sorted['Placement'] == nom_pl].copy().sort_values('Date')
             dfp['Net_cumulé'] = dfp['Int_net'].cumsum()
             fig = px.line(
-                dfp, x='Date', y='Net_cumulé',
+                dfp,
+                x='Date', y='Net_cumulé',
                 title=f"{nom_pl} - Net cumulé",
                 color_discrete_sequence=[color_map[nom_pl]],
                 labels={'Date': 'Mois', 'Net_cumulé':'€'}
@@ -610,6 +662,7 @@ else:
             fig.update_layout(margin=dict(t=50, l=40, r=20, b=40), height=320, template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
 
+        # Cumul annuel par placement (couleur par placement)
         st.markdown("### Cumul annuel par placement (couleur par placement)")
         cum_by_pl = monthly_sorted.copy().sort_values(['Placement','Date'])
         cum_by_pl['Net_cumulé'] = cum_by_pl.groupby('Placement')['Int_net'].cumsum()
@@ -636,6 +689,7 @@ else:
         )
         st.plotly_chart(fig_cumul, use_container_width=True)
 
+        # Cumul global empilé (net)
         st.markdown("### Cumul net global (aire empilée)")
         stacked = monthly_sorted.copy()
         stacked['Date_str'] = stacked['Date'].dt.strftime("%Y-%m")
@@ -705,7 +759,6 @@ with col_imp:
     if uploaded is not None:
         try:
             placements_imp, periode_imp = import_inputs_from_csv(uploaded.read())
-            # Garantir uid pour chaque placement importé
             for p in placements_imp:
                 p.setdefault("uid", str(uuid.uuid4()))
             st.session_state.placements = placements_imp
@@ -725,5 +778,6 @@ with st.expander("Notes & limites"):
         "- Les périodes de taux modélisent des changements en cours d'année; en l’absence de périodes, le taux défaut s’applique.\n"
         "- Tableau mensuel enrichi avec nb_jours (taille du mois) et moyennes/jour brut & net.\n"
         "- Graphiques Plotly: barres mensuelles, cumuls par placement, cumul global empilé.\n"
-        "- Édition fiable via st.data_editor+callback avec persistance immédiate dans l'état (pattern recommandé par la communauté)."
+        "- Édition fiable via st.data_editor + on_change + uid pour une persistance immédiate et stable."
     )
+
